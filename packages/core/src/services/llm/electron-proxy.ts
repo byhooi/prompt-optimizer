@@ -1,5 +1,6 @@
-import { ILLMService, Message, StreamHandlers, LLMResponse, ModelOption } from './types';
+import { ILLMService, Message, StreamHandlers, LLMResponse, ModelOption, ToolDefinition } from './types';
 import { safeSerializeForIPC } from '../../utils/ipc-serialization';
+import { InitializationError } from './errors';
 
 /**
  * Electron环境下的LLM服务代理
@@ -11,7 +12,7 @@ export class ElectronLLMProxy implements ILLMService {
   constructor() {
     // 验证Electron环境
     if (typeof window === 'undefined' || !window.electronAPI) {
-      throw new Error('ElectronLLMProxy can only be used in Electron renderer process');
+      throw new InitializationError('ElectronLLMProxy can only be used in Electron renderer process');
     }
     this.electronAPI = window.electronAPI;
   }
@@ -48,6 +49,36 @@ export class ElectronLLMProxy implements ILLMService {
       onError: callbacks.onError
     };
 
+    await this.electronAPI.llm.sendMessageStream(safeMessages, provider, adaptedCallbacks);
+  }
+
+  async sendMessageStreamWithTools(
+    messages: Message[],
+    provider: string,
+    tools: ToolDefinition[],
+    callbacks: StreamHandlers
+  ): Promise<void> {
+    // 自动序列化，防止Vue响应式对象IPC传递错误
+    const safeMessages = safeSerializeForIPC(messages);
+    const safeTools = safeSerializeForIPC(tools);
+
+    // 适配回调接口：StreamHandlers 使用 onToken/onToolCall，而 preload 期望相应的回调
+    const adaptedCallbacks = {
+      onContent: callbacks.onToken,  // 映射 onToken -> onContent
+      onThinking: callbacks.onReasoningToken || (() => {}),  // 映射推理流
+      onToolCall: callbacks.onToolCall || (() => {}),  // 🆕 映射工具调用回调
+      onFinish: () => callbacks.onComplete(),  // 映射完成回调
+      onError: callbacks.onError
+    };
+
+    // Prefer the dedicated tools-capable streaming channel when available.
+    const maybe = this.electronAPI.llm.sendMessageStreamWithTools;
+    if (typeof maybe === 'function') {
+      await maybe(safeMessages, provider, safeTools, adaptedCallbacks);
+      return;
+    }
+
+    // Back-compat fallback (older preload/main): stream without tool-call events.
     await this.electronAPI.llm.sendMessageStream(safeMessages, provider, adaptedCallbacks);
   }
 

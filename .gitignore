@@ -1,3 +1,4 @@
+.*-session
 # ==========================================
 # 构建输出和分发文件
 # ==========================================
@@ -56,6 +57,8 @@ logs
 .eslintcache
 .stylelintcache
 .tsbuildinfo
+*.tsbuildinfo
+**/tsconfig.tsbuildinfo
 .rollup.cache
 
 # ==========================================
@@ -179,3 +182,17 @@ storybook-static
 
 prompt-optimizer-datas
 prompt-optimizer-data
+.claude
+.playwright-mcp
+nul
+.spec-workflow
+.trae
+.cursor/rules/bmad
+CLAUDE.md
+.vscode
+.mcp.json
+.kilocode
+.serena
+.kiro
+# BMAD (local only)
+.ace-tool/

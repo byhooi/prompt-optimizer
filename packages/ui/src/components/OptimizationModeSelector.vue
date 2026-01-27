@@ -1,92 +1,123 @@
-<!-- 优化模式选择器组件 - 简化版 -->
+<!-- 优化模式选择器组件 - 使用 Naive UI RadioGroup -->
 <template>
-  <div class="optimization-mode-selector">
-    <div class="inline-flex theme-background-surface rounded theme-border-strong text-[10px]">
-      <button
-        @click="updateOptimizationMode('system')"
-        :class="[
-          'px-1.5 py-0.5 transition-colors duration-150 rounded-l',
-          'focus:outline-none focus:ring-1 focus:ring-blue-400',
-          modelValue === 'system'
-            ? 'theme-button-toggle-active'
-            : 'theme-button-toggle-inactive'
-        ]"
-        :aria-pressed="modelValue === 'system'"
-        :title="t('promptOptimizer.systemPromptHelp')"
+  <NRadioGroup data-testid="optimization-mode-selector"
+    :value="modelValue"
+    @update:value="updateOptimizationMode"
+    size="small"
+    class="optimization-mode-selector"
+  >
+    <!-- 基础模式：系统 | 用户 -->
+    <template v-if="functionMode !== 'pro'">
+      <NRadioButton
+        v-if="!hideSystemOption"
+        data-testid="sub-mode-system"
+        value="system"
+        :title="systemHelp"
       >
-        {{ t('promptOptimizer.systemPrompt') }}
-      </button>
-      <div class="w-px theme-border-strong"></div>
-      <button
-        @click="updateOptimizationMode('user')"
-        :class="[
-          'px-1.5 py-0.5 transition-colors duration-150 rounded-r',
-          'focus:outline-none focus:ring-1 focus:ring-blue-400',
-          modelValue === 'user'
-            ? 'theme-button-toggle-active'
-            : 'theme-button-toggle-inactive'
-        ]"
-        :aria-pressed="modelValue === 'user'"
-        :title="t('promptOptimizer.userPromptHelp')"
+        {{ systemLabel }}
+      </NRadioButton>
+      <NRadioButton
+        data-testid="sub-mode-user"
+        value="user"
+        :title="userHelp"
       >
-        {{ t('promptOptimizer.userPrompt') }}
-      </button>
-    </div>
-  </div>
+        {{ userLabel }}
+      </NRadioButton>
+    </template>
+    <!-- Pro 模式：变量 | 多对话 -->
+    <template v-else>
+      <NRadioButton
+        data-testid="sub-mode-variable"
+        value="variable"
+        :title="userHelp"
+      >
+        {{ userLabel }}
+      </NRadioButton>
+      <NRadioButton
+        v-if="!hideSystemOption"
+        data-testid="sub-mode-multi"
+        value="multi"
+        :title="systemHelp"
+      >
+        {{ systemLabel }}
+      </NRadioButton>
+    </template>
+  </NRadioGroup>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { NRadioGroup, NRadioButton } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import type { OptimizationMode } from '@prompt-optimizer/core'
+import type { BasicSubMode, ProSubMode } from '@prompt-optimizer/core'
+import type { FunctionMode } from '../composables/mode'
 
 const { t } = useI18n()
 
+type SubMode = BasicSubMode | ProSubMode
+
 interface Props {
-  modelValue: OptimizationMode
+  modelValue: SubMode
+  /** 是否隐藏系统提示词选项（用于临时禁用功能） */
+  hideSystemOption?: boolean
+  /** 当前功能模式，用于决定显示文案 */
+  functionMode?: FunctionMode
 }
 
 interface Emits {
-  (e: 'update:modelValue', value: OptimizationMode): void
-  (e: 'change', value: OptimizationMode): void
+  (e: 'update:modelValue', value: SubMode): void
+  (e: 'change', value: SubMode): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  hideSystemOption: false,
+  functionMode: 'basic',
+})
 const emit = defineEmits<Emits>()
+
+// 根据功能模式动态获取按钮文本
+const systemLabel = computed(() => {
+  return props.functionMode === 'pro'
+    ? t('contextMode.optimizationMode.message')
+    : t('promptOptimizer.systemPrompt')
+})
+
+const userLabel = computed(() => {
+  return props.functionMode === 'pro'
+    ? t('contextMode.optimizationMode.variable')
+    : t('promptOptimizer.userPrompt')
+})
+
+const systemHelp = computed(() => {
+  return props.functionMode === 'pro'
+    ? t('contextMode.system.tooltip')
+    : t('promptOptimizer.systemPromptHelp')
+})
+
+const userHelp = computed(() => {
+  return props.functionMode === 'pro'
+    ? t('contextMode.user.tooltip')
+    : t('promptOptimizer.userPromptHelp')
+})
 
 /**
  * 更新优化模式
  */
-const updateOptimizationMode = (mode: OptimizationMode) => {
-  if (mode !== props.modelValue) {
-    emit('update:modelValue', mode)
-    emit('change', mode)
-  }
+const updateOptimizationMode = (mode: SubMode) => {
+  emit('update:modelValue', mode)
+  emit('change', mode)
 }
 </script>
 
 <style scoped>
-.optimization-mode-selector {
-  display: inline-flex;
-}
-
-/* 微妙的按钮反馈 */
-.optimization-mode-selector button:active {
-  transform: scale(0.95);
-}
-
-/* 响应式设计 */
+/* 响应式设计 - 移动端全宽显示 */
 @media (max-width: 640px) {
   .optimization-mode-selector {
     width: 100%;
   }
 
-  .optimization-mode-selector .inline-flex {
-    display: flex;
-    width: 100%;
-  }
-
-  .optimization-mode-selector button {
+  .optimization-mode-selector :deep(.n-radio-button) {
     flex: 1;
   }
 }
-</style> 
+</style>

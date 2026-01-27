@@ -2,6 +2,14 @@ import { IHistoryManager } from '../history/types';
 import { IModelManager } from '../model/types';
 import { ITemplateManager } from '../template/types';
 import { IPreferenceService } from '../preference/types';
+import { ContextRepo } from '../context/types';
+import {
+  DataExportFailedError,
+  DataImportPartialFailedError,
+  DataInvalidFormatError,
+  DataInvalidJsonError,
+} from './errors';
+import { toErrorWithCode } from '../../utils/error';
 
 /**
  * 数据导入导出管理器
@@ -36,17 +44,20 @@ export class DataManager implements IDataManager {
   private templateManager: ITemplateManager;
   private historyManager: IHistoryManager;
   private preferenceService: IPreferenceService;
+  private contextRepo: ContextRepo;
 
   constructor(
     modelManager: IModelManager,
     templateManager: ITemplateManager,
     historyManager: IHistoryManager,
-    preferenceService: IPreferenceService
+    preferenceService: IPreferenceService,
+    contextRepo: ContextRepo
   ) {
     this.modelManager = modelManager;
     this.templateManager = templateManager;
     this.historyManager = historyManager;
     this.preferenceService = preferenceService;
+    this.contextRepo = contextRepo;
   }
 
   async exportAllData(): Promise<string> {
@@ -58,9 +69,13 @@ export class DataManager implements IDataManager {
       data['models'] = await this.modelManager.exportData();
       data['userTemplates'] = await this.templateManager.exportData();
       data['userSettings'] = await this.preferenceService.exportData();
+      data['contexts'] = await this.contextRepo.exportData();
     } catch (error) {
       console.error('导出数据失败:', error);
-      throw error;
+      if (typeof (error as any)?.code === 'string') {
+        throw toErrorWithCode(error)
+      }
+      throw new DataExportFailedError(error instanceof Error ? error.message : String(error))
     }
 
     const exportFormat = {
@@ -77,11 +92,11 @@ export class DataManager implements IDataManager {
     try {
       exportData = JSON.parse(dataString);
     } catch (error) {
-      throw new Error('Invalid data format: failed to parse JSON');
+      throw new DataInvalidJsonError(error instanceof Error ? error.message : String(error))
     }
 
     if (!exportData || typeof exportData !== 'object' || Array.isArray(exportData)) {
-      throw new Error('Invalid data format: data must be an object');
+      throw new DataInvalidFormatError('Data must be an object')
     }
 
     // Support both old and new format for backward compatibility
@@ -90,16 +105,16 @@ export class DataManager implements IDataManager {
     // New format: { version: 1, data: { ... } }
     if (exportData.version) {
       if (!exportData.data || typeof exportData.data !== 'object' || Array.isArray(exportData.data)) {
-        throw new Error('Invalid data format: "data" property is missing or not an object');
+        throw new DataInvalidFormatError('"data" property is missing or not an object')
       }
       dataToImport = exportData.data;
     }
     // Old format: direct data object { history: [...], models: [...], ... }
-    else if (exportData.history || exportData.models || exportData.userTemplates || exportData.userSettings) {
+    else if (exportData.history || exportData.models || exportData.userTemplates || exportData.userSettings || exportData.contexts) {
       dataToImport = exportData;
     }
     else {
-      throw new Error('Invalid data format: unrecognized data structure');
+      throw new DataInvalidFormatError('Unrecognized data structure')
     }
 
     const errors: string[] = [];
@@ -109,7 +124,8 @@ export class DataManager implements IDataManager {
       { service: this.historyManager, dataKey: 'history' },
       { service: this.modelManager, dataKey: 'models' },
       { service: this.templateManager, dataKey: 'userTemplates' },
-      { service: this.preferenceService, dataKey: 'userSettings' }
+      { service: this.preferenceService, dataKey: 'userSettings' },
+      { service: this.contextRepo, dataKey: 'contexts' }
     ];
 
     for (const { service, dataKey } of serviceMap) {
@@ -126,7 +142,7 @@ export class DataManager implements IDataManager {
     }
 
     if (errors.length > 0) {
-      throw new Error(`Import completed with ${errors.length} errors: ${errors.join('; ')}`);
+      throw new DataImportPartialFailedError(errors.length, errors.join('; '))
     }
   }
 }
@@ -137,13 +153,15 @@ export class DataManager implements IDataManager {
  * @param templateManager 模板管理器实例
  * @param historyManager 历史记录管理器实例
  * @param preferenceService 偏好设置服务实例
+ * @param contextRepo 上下文仓库实例
  * @returns 数据管理器实例
  */
 export function createDataManager(
   modelManager: IModelManager,
   templateManager: ITemplateManager,
   historyManager: IHistoryManager,
-  preferenceService: IPreferenceService
+  preferenceService: IPreferenceService,
+  contextRepo: ContextRepo
 ): DataManager {
-  return new DataManager(modelManager, templateManager, historyManager, preferenceService);
+  return new DataManager(modelManager, templateManager, historyManager, preferenceService, contextRepo);
 }

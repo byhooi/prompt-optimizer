@@ -4,7 +4,9 @@ import { IHistoryManager } from '../../../src/services/history/types';
 import { IModelManager } from '../../../src/services/model/types';
 import { ITemplateManager, Template } from '../../../src/services/template/types';
 import { IPreferenceService } from '../../../src/services/preference/types';
+import { ContextRepo } from '../../../src/services/context/types';
 import { MemoryStorageProvider } from '../../../src/services/storage/memoryStorageProvider';
+import { DATA_ERROR_CODES } from '../../../src/constants/error-codes';
 
 describe('DataManager', () => {
   let dataManager: DataManager;
@@ -12,6 +14,7 @@ describe('DataManager', () => {
   let mockTemplateManager: ITemplateManager;
   let mockHistoryManager: IHistoryManager;
   let mockPreferenceService: IPreferenceService;
+  let mockContextRepo: ContextRepo;
   let mockStorageProvider: MemoryStorageProvider;
 
   beforeEach(() => {
@@ -89,12 +92,32 @@ describe('DataManager', () => {
       validateData: vi.fn().mockReturnValue(true),
     };
 
+    mockContextRepo = {
+      list: vi.fn().mockResolvedValue([]),
+      getCurrentId: vi.fn().mockResolvedValue('default'),
+      setCurrentId: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue({}),
+      create: vi.fn().mockResolvedValue('new-context-id'),
+      duplicate: vi.fn().mockResolvedValue('duplicated-context-id'),
+      rename: vi.fn().mockResolvedValue(undefined),
+      save: vi.fn().mockResolvedValue(undefined),
+      update: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      exportAll: vi.fn().mockResolvedValue({}),
+      importAll: vi.fn().mockResolvedValue({}),
+      exportData: vi.fn().mockResolvedValue({}),
+      importData: vi.fn().mockResolvedValue(undefined),
+      getDataType: vi.fn().mockReturnValue('contexts'),
+      validateData: vi.fn().mockReturnValue(true),
+    } as ContextRepo;
+
     // 4. 使用正确的参数顺序实例化 DataManager
     dataManager = new DataManager(
       mockModelManager,
       mockTemplateManager,
       mockHistoryManager,
-      mockPreferenceService
+      mockPreferenceService,
+      mockContextRepo
     );
   });
 
@@ -164,11 +187,13 @@ describe('DataManager', () => {
     });
 
     it('should throw an error for invalid JSON string', async () => {
-      await expect(dataManager.importAllData('invalid-json')).rejects.toThrow('Invalid data format: failed to parse JSON');
+      await expect(dataManager.importAllData('invalid-json'))
+        .rejects.toMatchObject({ code: DATA_ERROR_CODES.INVALID_JSON });
     });
 
     it('should throw an error for data without a "data" property in new format', async () => {
-      await expect(dataManager.importAllData(JSON.stringify({ version: 1 }))).rejects.toThrow('Invalid data format: "data" property is missing or not an object');
+      await expect(dataManager.importAllData(JSON.stringify({ version: 1 })))
+        .rejects.toMatchObject({ code: DATA_ERROR_CODES.INVALID_FORMAT });
     });
 
     it('should support old format for backward compatibility', async () => {
