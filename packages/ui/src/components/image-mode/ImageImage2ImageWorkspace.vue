@@ -109,7 +109,20 @@
                     </NFlex>
 
                     <!-- 输入框 -->
+                    <VariableAwareInput
+                        v-if="variableInputData"
+                        data-testid="image-image2image-input"
+                        :model-value="originalPrompt"
+                        @update:model-value="handleOriginalPromptInput"
+                        :readonly="isOptimizing"
+                        :placeholder="t('imageWorkspace.input.originalPromptPlaceholder')"
+                        :autosize="true"
+                        v-bind="variableInputData"
+                        @variable-extracted="handleVariableExtracted"
+                        @add-missing-variable="handleAddMissingVariable"
+                    />
                     <NInput
+                        v-else
                         v-model:value="originalPrompt"
                         type="textarea"
                         data-testid="image-image2image-input"
@@ -389,6 +402,13 @@
             <!-- 右侧：图像生成测试区域（图像模型，多列 variants） -->
             <div ref="testPaneRef" class="split-pane" style="min-width: 0; height: 100%; overflow: hidden;">
                 <NFlex vertical :style="{ height: '100%', gap: '12px' }">
+                    <TemporaryVariablesPanel
+                        :manager="temporaryVariablePanelManager"
+                        :disabled="isOptimizing"
+                        :show-generate-values="true"
+                        :is-generating="isGenerating"
+                        @generate-values="handleGenerateValues"
+                    />
                     <!-- 顶部：列数与全局操作 -->
                     <NCard size="small" :style="{ flexShrink: 0 }">
                         <div class="test-area-top">
@@ -613,6 +633,12 @@
             />
         </FullscreenDialog>
 
+        <VariableValuePreviewDialog
+            v-model:show="showPreviewDialog"
+            :result="generationResult"
+            @confirm="confirmBatchApply"
+        />
+
         <!-- 图片上传弹窗 -->
         <n-modal
             data-testid="image-image2image-upload-modal"
@@ -728,6 +754,19 @@ import FullscreenDialog from "../FullscreenDialog.vue";
 import type { SelectOption } from "../../types/select-options";
 import { useToast } from "../../composables/ui/useToast";
 import { getI18nErrorMessage } from '../../utils/error'
+import { VariableAwareInput } from '../variable-extraction'
+import TemporaryVariablesPanel from '../variable/TemporaryVariablesPanel.vue'
+import VariableValuePreviewDialog from '../variable/VariableValuePreviewDialog.vue'
+import { useTemporaryVariables } from '../../composables/variable/useTemporaryVariables'
+import { useVariableAwareInputBridge } from '../../composables/variable/useVariableAwareInputBridge'
+import { useTestVariableManager } from '../../composables/variable/useTestVariableManager'
+import { useSmartVariableValueGeneration } from '../../composables/variable/useSmartVariableValueGeneration'
+import type { VariableManagerHooks } from '../../composables/prompt/useVariableManager'
+import {
+    buildPromptExecutionContext,
+    hashString,
+    hashVariables,
+} from '../../utils/prompt-variables'
 import {
     useImageImage2ImageSession,
     type TestColumnCount,
@@ -763,6 +802,72 @@ const toast = useToast();
 
 // 服务注入
 const services = inject<Ref<AppServices | null>>("services", ref(null));
+
+// 变量系统（全局变量 + 临时变量）
+// - 全局变量由 PromptOptimizerApp 创建并 provide
+// - 临时变量由 Pinia store 承载（刷新即丢失）
+const variableManager = inject<VariableManagerHooks | null>('variableManager', null)
+const tempVarsManager = useTemporaryVariables()
+
+const {
+    variableInputData,
+    predefinedVariableValues: purePredefinedVariables,
+    handleVariableExtracted,
+    handleAddMissingVariable,
+} = useVariableAwareInputBridge({
+    enabled: computed(() => true),
+    isReady: computed(() => variableManager?.isReady.value ?? false),
+    globalVariables: computed(() => variableManager?.customVariables.value || {}),
+    temporaryVariables: tempVarsManager.temporaryVariables,
+    allVariables: computed(() => variableManager?.allVariables.value || {}),
+    saveGlobalVariable: (name, value) => variableManager?.addVariable(name, value),
+    saveTemporaryVariable: (name, value) => tempVarsManager.setVariable(name, value),
+    logPrefix: 'ImageImage2ImageWorkspace',
+})
+
+const temporaryVariablePanelManager = useTestVariableManager({
+    globalVariables: computed(() => variableManager?.customVariables.value || {}),
+    predefinedVariables: purePredefinedVariables,
+    temporaryVariables: computed(() => tempVarsManager.temporaryVariables.value),
+    onVariableChange: (name, value) => {
+        tempVarsManager.setVariable(name, value)
+    },
+    onVariableRemove: (name) => {
+        tempVarsManager.deleteVariable(name)
+    },
+    onVariablesClear: () => {
+        tempVarsManager.clearAll()
+    },
+    onSaveToGlobal: (name, value) => {
+        if (!variableManager || !variableManager.isReady.value) {
+            throw new Error('variable manager not ready')
+        }
+        variableManager.addVariable(name, value)
+    },
+})
+
+const {
+    isGenerating,
+    generationResult,
+    showPreviewDialog,
+    handleGenerateValues,
+    confirmBatchApply,
+} = useSmartVariableValueGeneration({
+    services,
+    promptContent: computed(() => optimizedPrompt.value || originalPrompt.value),
+    variableNames: computed(() => temporaryVariablePanelManager.sortedVariables.value),
+    getVariableValue: (name: string) => temporaryVariablePanelManager.getVariableDisplayValue(name),
+    getVariableSource: (name: string) => temporaryVariablePanelManager.getVariableSource(name),
+    applyValue: (name: string, value: string) => {
+        temporaryVariablePanelManager.handleVariableValueChange(name, value)
+    },
+})
+
+const handleOriginalPromptInput = (value: string) => {
+    originalPrompt.value = value
+}
+
+// handleVariableExtracted / handleAddMissingVariable are provided by useVariableAwareInputBridge
 
 // Session store（单一真源）
 const session = useImageImage2ImageSession()
@@ -1115,7 +1220,7 @@ const resolvePromptForSelection = (selection: TestPanelVersionValue): ResolvedPr
     }
 
     if (selection === 'latest') {
-        if (!latest) return { text: optimizedPrompt.value || v0, resolvedVersion: latest?.version ?? 0 }
+        if (!latest) return { text: optimizedPrompt.value || v0, resolvedVersion: 0 }
         return { text: latest.optimizedPrompt || '', resolvedVersion: latest.version }
     }
 
@@ -1173,12 +1278,21 @@ const getVariantImageTestId = (id: TestVariantId) => {
 const getVariantResult = (id: TestVariantId) => variantResults.value[id]
 const hasVariantResult = (id: TestVariantId) => !!(variantResults.value[id]?.images?.length)
 
-const hashString = (input: string): string => {
-    let hash = 5381
-    for (let i = 0; i < input.length; i++) {
-        hash = ((hash << 5) + hash) ^ input.charCodeAt(i)
+// image 模式变量优先级：global < temporary < predefined
+const mergedGenerationVariables = computed<Record<string, string>>(() => ({
+    ...(variableManager?.customVariables.value || {}),
+    ...(tempVarsManager.temporaryVariables.value || {}),
+    ...(purePredefinedVariables.value || {}),
+}))
+
+const buildRuntimePredefinedVariables = (resolved: ResolvedPrompt): Record<string, string> => {
+    const current = (resolved.text || '').trim()
+    return {
+        originalPrompt: (originalPrompt.value || '').trim(),
+        lastOptimizedPrompt: (optimizedPrompt.value || '').trim(),
+        currentPrompt: current,
+        userQuestion: current,
     }
-    return (hash >>> 0).toString(36)
 }
 
 // 仅用于 stale 检测：避免对完整 base64 扫描（可能很大）
@@ -1201,9 +1315,14 @@ const getVariantFingerprint = (id: TestVariantId) => {
     const selection = variantVersionModels[id].value
     const resolved = resolvePromptForSelection(selection)
     const modelKey = (variantModelKeyModels[id].value || '').trim()
-    const promptHash = hashString(resolved.text || '')
+    const promptHash = hashString((resolved.text || '').trim())
     const imgSig = getInputImageSignature()
-    return `${String(selection)}:${resolved.resolvedVersion}:${modelKey}:${promptHash}:${imgSig}`
+    const varsForFingerprint = {
+        ...mergedGenerationVariables.value,
+        ...buildRuntimePredefinedVariables(resolved),
+    }
+    const varsHash = hashVariables(varsForFingerprint)
+    return `${String(selection)}:${resolved.resolvedVersion}:${modelKey}:${promptHash}:${varsHash}:${imgSig}`
 }
 
 const isVariantStale = (id: TestVariantId) => {
@@ -1226,13 +1345,34 @@ const getVariantRequest = (id: TestVariantId): Image2ImageRequest | null => {
         return null
     }
 
+    const varsForRequest = {
+        ...mergedGenerationVariables.value,
+        ...buildRuntimePredefinedVariables(resolved),
+    }
+
+    const ctx = buildPromptExecutionContext(resolved.text, varsForRequest)
+    if (ctx.forbiddenTemplateSyntax.length > 0) {
+        toast.error(t('imageWorkspace.generation.forbiddenTemplateSyntax'))
+        return null
+    }
+    if (ctx.missingVariables.length > 0) {
+        toast.error(t('imageWorkspace.generation.missingVariables', { vars: ctx.missingVariables.join(', ') }))
+        return null
+    }
+
+    const prompt = ctx.renderedContent
+    if (!prompt.trim()) {
+        toast.error(t('imageWorkspace.generation.missingRequiredFields'))
+        return null
+    }
+
     if (!inputImageB64.value) {
         toast.error(t('imageWorkspace.generation.inputImageRequired'))
         return null
     }
 
     return {
-        prompt: resolved.text,
+        prompt,
         configId: modelKey,
         count: 1,
         inputImage: { b64: inputImageB64.value, mimeType: inputImageMime.value || 'image/png' },

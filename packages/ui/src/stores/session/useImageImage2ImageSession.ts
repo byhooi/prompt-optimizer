@@ -10,6 +10,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getPiniaServices } from '../../plugins/pinia'
+import { isValidVariableName, sanitizeVariableRecord } from '../../types/variable'
 import {
   isImageRef,
   createImageRef,
@@ -66,6 +67,14 @@ export interface ImageImage2ImageSessionState {
   reasoning: string
   chainId: string
   versionId: string
+
+  /**
+   * 临时变量（子模式隔离 + 持久化）
+   * - image-image2image 维度持久化（刷新不丢）
+   * - 不与 image-text2image / pro-* 共享
+   */
+  temporaryVariables: Record<string, string>
+
   inputImageB64: string | null
   inputImageId: string | null
   inputImageMime: string
@@ -94,6 +103,7 @@ const createDefaultState = (): ImageImage2ImageSessionState => ({
   reasoning: '',
   chainId: '',
   versionId: '',
+  temporaryVariables: {},
   inputImageB64: null,
   inputImageId: null,
   inputImageMime: '',
@@ -136,6 +146,7 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
   const reasoning = ref('')
   const chainId = ref('')
   const versionId = ref('')
+  const temporaryVariables = ref<Record<string, string>>({})
   const evaluationResults = ref<PersistedEvaluationResults>(createDefaultEvaluationResults())
   const inputImageB64 = ref<string | null>(null)
   const inputImageId = ref<string | null>(null)
@@ -313,6 +324,33 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
     lastActiveAt.value = Date.now()
   }
 
+  // 临时变量（持久化到 session）
+  const setTemporaryVariable = (name: string, value: string) => {
+    if (!isValidVariableName(name)) {
+      console.warn('[ImageImage2ImageSession] Ignoring invalid temporary variable name:', name)
+      return
+    }
+    temporaryVariables.value[name] = value
+    lastActiveAt.value = Date.now()
+  }
+
+  const getTemporaryVariable = (name: string): string | undefined => {
+    return Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)
+      ? temporaryVariables.value[name]
+      : undefined
+  }
+
+  const deleteTemporaryVariable = (name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)) return
+    delete temporaryVariables.value[name]
+    lastActiveAt.value = Date.now()
+  }
+
+  const clearTemporaryVariables = () => {
+    temporaryVariables.value = {}
+    lastActiveAt.value = Date.now()
+  }
+
   const reset = () => {
     const defaultState = createDefaultState()
     originalPrompt.value = defaultState.originalPrompt
@@ -320,6 +358,7 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
     reasoning.value = defaultState.reasoning
     chainId.value = defaultState.chainId
     versionId.value = defaultState.versionId
+    temporaryVariables.value = defaultState.temporaryVariables
     inputImageB64.value = defaultState.inputImageB64
     inputImageId.value = defaultState.inputImageId
     inputImageMime.value = defaultState.inputImageMime
@@ -521,6 +560,7 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
         reasoning: reasoning.value,
         chainId: chainId.value,
         versionId: versionId.value,
+        temporaryVariables: sanitizeVariableRecord(temporaryVariables.value),
         inputImageId: inputImageIdToSave,
         inputImageB64: null,
         inputImageMime: inputImageMime.value,
@@ -692,6 +732,8 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
          reasoning.value = typeof parsed.reasoning === 'string' ? parsed.reasoning : ''
          chainId.value = typeof parsed.chainId === 'string' ? parsed.chainId : ''
          versionId.value = typeof parsed.versionId === 'string' ? parsed.versionId : ''
+
+          temporaryVariables.value = sanitizeVariableRecord(parsed.temporaryVariables)
           inputImageB64.value = typeof inputImageB64Loaded === 'string' ? inputImageB64Loaded : null
           inputImageId.value = typeof parsed.inputImageId === 'string' ? parsed.inputImageId : null
           inputImageMime.value = typeof parsed.inputImageMime === 'string' ? parsed.inputImageMime : ''
@@ -737,6 +779,7 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
     reasoning,
     chainId,
     versionId,
+    temporaryVariables,
     evaluationResults,
     inputImageB64,
     inputImageId,
@@ -770,6 +813,12 @@ export const useImageImage2ImageSession = defineStore('imageImage2ImageSession',
     updateTemplate,
     updateIterateTemplate,
     toggleCompareMode,
+
+    setTemporaryVariable,
+    getTemporaryVariable,
+    deleteTemporaryVariable,
+    clearTemporaryVariables,
+
     reset,
 
     // ========== 持久化方法 ==========

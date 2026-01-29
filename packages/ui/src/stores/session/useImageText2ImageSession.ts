@@ -9,6 +9,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getPiniaServices } from '../../plugins/pinia'
+import { isValidVariableName, sanitizeVariableRecord } from '../../types/variable'
 import {
   isImageRef,
   createImageRef,
@@ -65,6 +66,14 @@ export interface ImageText2ImageSessionState {
   reasoning: string
   chainId: string
   versionId: string
+
+  /**
+   * 临时变量（子模式隔离 + 持久化）
+   * - image-text2image 维度持久化（刷新不丢）
+   * - 不与 image-image2image / pro-* 共享
+   */
+  temporaryVariables: Record<string, string>
+
   originalImageResult: ImageResult | null
   optimizedImageResult: ImageResult | null
   // v2: 多列测试（最多 4 列）
@@ -90,6 +99,7 @@ const createDefaultState = (): ImageText2ImageSessionState => ({
   reasoning: '',
   chainId: '',
   versionId: '',
+  temporaryVariables: {},
   originalImageResult: null,
   optimizedImageResult: null,
   // v2: 多列测试（最多 4 列）
@@ -129,6 +139,7 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
   const reasoning = ref('')
   const chainId = ref('')
   const versionId = ref('')
+  const temporaryVariables = ref<Record<string, string>>({})
   const evaluationResults = ref<PersistedEvaluationResults>(createDefaultEvaluationResults())
   const originalImageResult = ref<ImageResult | null>(null)
   const optimizedImageResult = ref<ImageResult | null>(null)
@@ -296,6 +307,33 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
     lastActiveAt.value = Date.now()
   }
 
+  // 临时变量（持久化到 session）
+  const setTemporaryVariable = (name: string, value: string) => {
+    if (!isValidVariableName(name)) {
+      console.warn('[ImageText2ImageSession] Ignoring invalid temporary variable name:', name)
+      return
+    }
+    temporaryVariables.value[name] = value
+    lastActiveAt.value = Date.now()
+  }
+
+  const getTemporaryVariable = (name: string): string | undefined => {
+    return Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)
+      ? temporaryVariables.value[name]
+      : undefined
+  }
+
+  const deleteTemporaryVariable = (name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)) return
+    delete temporaryVariables.value[name]
+    lastActiveAt.value = Date.now()
+  }
+
+  const clearTemporaryVariables = () => {
+    temporaryVariables.value = {}
+    lastActiveAt.value = Date.now()
+  }
+
   const reset = () => {
     const defaultState = createDefaultState()
     originalPrompt.value = defaultState.originalPrompt
@@ -303,6 +341,7 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
     reasoning.value = defaultState.reasoning
     chainId.value = defaultState.chainId
     versionId.value = defaultState.versionId
+    temporaryVariables.value = defaultState.temporaryVariables
     originalImageResult.value = defaultState.originalImageResult
     optimizedImageResult.value = defaultState.optimizedImageResult
     layout.value = defaultState.layout
@@ -458,6 +497,7 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
         reasoning: reasoning.value,
         chainId: chainId.value,
         versionId: versionId.value,
+        temporaryVariables: sanitizeVariableRecord(temporaryVariables.value),
         // legacy: 仍保留 original/optimized 字段（对应 A/B）
         originalImageResult: variantResultsToSave.a,
         optimizedImageResult: variantResultsToSave.b,
@@ -611,6 +651,8 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
         reasoning.value = typeof parsed.reasoning === 'string' ? parsed.reasoning : ''
         chainId.value = typeof parsed.chainId === 'string' ? parsed.chainId : ''
         versionId.value = typeof parsed.versionId === 'string' ? parsed.versionId : ''
+
+        temporaryVariables.value = sanitizeVariableRecord(parsed.temporaryVariables)
         evaluationResults.value = {
           ...createDefaultEvaluationResults(),
           ...(parsed.evaluationResults && typeof parsed.evaluationResults === 'object'
@@ -652,6 +694,7 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
     reasoning,
     chainId,
     versionId,
+    temporaryVariables,
     evaluationResults,
     originalImageResult,
     optimizedImageResult,
@@ -681,6 +724,12 @@ export const useImageText2ImageSession = defineStore('imageText2ImageSession', (
     updateTemplate,
     updateIterateTemplate,
     toggleCompareMode,
+
+    setTemporaryVariable,
+    getTemporaryVariable,
+    deleteTemporaryVariable,
+    clearTemporaryVariables,
+
     reset,
 
     // ========== 持久化方法 ==========

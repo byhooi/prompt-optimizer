@@ -166,7 +166,6 @@
                         :temporary-variables="tempVars.temporaryVariables.value"
                         :input-mode="inputMode"
                         :button-size="buttonSize"
-                        @open-global-variables="emit('open-global-variables')"
                         @variable-change="handleVariableChange"
                         @save-to-global="(name: string, value: string) => emit('save-to-global', name, value)"
                         @temporary-variable-remove="handleVariableRemove"
@@ -463,6 +462,11 @@ import { OptionAccessors } from '../../utils/data-transformer'
 import { useToast } from "../../composables/ui/useToast";
 import { useElementSize } from '@vueuse/core'
 import {
+    buildConversationExecutionContext,
+    hashString,
+    hashVariables,
+} from '../../utils/prompt-variables'
+import {
     applyPatchOperationsToText,
     PREDEFINED_VARIABLES,
     type ConversationMessage,
@@ -561,7 +565,6 @@ const emit = defineEmits<{
     (e: "message-change", index: number, message: ConversationMessage, action: "add" | "update" | "delete"): void;
 
     // 打开面板/管理器
-    (e: "open-global-variables"): void;
     (e: "open-variable-manager"): void;
     (e: "open-context-editor", tab?: string): void;
     (e: "open-template-manager", type?: string): void;
@@ -1021,25 +1024,6 @@ const getVariantOutputTestId = (id: TestVariantId) => {
 const getVariantResult = (id: TestVariantId) => variantResults[id]
 const hasVariantResult = (id: TestVariantId) => !!(variantResults[id]?.result || '').trim()
 
-const hashString = (input: string): string => {
-    let hash = 5381
-    for (let i = 0; i < input.length; i++) {
-        hash = ((hash << 5) + hash) ^ input.charCodeAt(i)
-    }
-    return (hash >>> 0).toString(36)
-}
-
-const stableStringifyVars = (vars: Record<string, string>): string => {
-    const keys = Object.keys(vars).sort()
-    let out = ''
-    for (const k of keys) {
-        out += `${k}=${vars[k] ?? ''}\n`
-    }
-    return out
-}
-
-const variablesHash = computed(() => hashString(stableStringifyVars(mergedTestVariables.value)))
-
 const formatConversationAsText = (messages: ConversationMessage[]): string => {
     if (!messages || messages.length === 0) return ''
     return messages.map((msg) => `${String(msg.role).toUpperCase()}: ${msg.content}`).join('\n\n')
@@ -1075,7 +1059,18 @@ const getVariantFingerprint = (id: TestVariantId) => {
     const messages = buildMessagesForSelection(selection)
     const convHash = hashString(formatConversationAsText(messages))
     const toolsHash = hashString(formatToolsAsText(tools))
-    return `${selectedMessageId.value || ''}:${String(selection)}:${resolved.resolvedVersion}:${modelKey}:${convHash}:${toolsHash}:${variablesHash.value}`
+
+    const baseVars = variableManager?.allVariables.value || {}
+    const conversationContext = formatConversationAsText(messages)
+    const toolsContext = formatToolsAsText(tools)
+    const varsHash = hashVariables({
+        ...baseVars,
+        ...mergedTestVariables.value,
+        conversationContext,
+        toolsContext,
+    })
+
+    return `${selectedMessageId.value || ''}:${String(selection)}:${resolved.resolvedVersion}:${modelKey}:${convHash}:${toolsHash}:${varsHash}`
 }
 
 const isVariantStale = (id: TestVariantId) => {
@@ -1120,7 +1115,7 @@ const getVariantTestInput = (id: TestVariantId): VariantTestInput | null => {
     const messages = buildMessagesForSelection(variantVersionModels[id].value)
     const tools = optimizationContextToolsRef.value || []
 
-    const baseVars = variableManager?.variableManager.value?.resolveAllVariables() || {}
+    const baseVars = variableManager?.allVariables.value || {}
     const conversationContext = formatConversationAsText(messages)
     const toolsContext = formatToolsAsText(tools)
     const variables = {
@@ -1130,8 +1125,18 @@ const getVariantTestInput = (id: TestVariantId): VariantTestInput | null => {
         toolsContext,
     }
 
+    const ctx = buildConversationExecutionContext(messages, variables)
+    if (ctx.forbiddenTemplateSyntax.length > 0) {
+        toast.error(t('test.error.forbiddenTemplateSyntax'))
+        return null
+    }
+    if (ctx.missingVariables.length > 0) {
+        toast.error(t('test.error.missingVariables', { vars: ctx.missingVariables.join(', ') }))
+        return null
+    }
+
     return {
-        messages,
+        messages: ctx.renderedMessages,
         modelKey,
         resolvedVersion: resolved.resolvedVersion,
         tools,

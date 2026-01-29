@@ -12,6 +12,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getPiniaServices } from '../../plugins/pinia'
 import { TEMPLATE_SELECTION_KEYS, type ConversationMessage } from '@prompt-optimizer/core'
+import { isValidVariableName, sanitizeVariableRecord } from '../../types/variable'
 import {
   createDefaultEvaluationResults,
   type PersistedEvaluationResults,
@@ -34,6 +35,14 @@ export interface ProMultiMessageSessionState {
   reasoning: string
   chainId: string
   versionId: string
+
+  /**
+   * 临时变量（子模式隔离 + 持久化）
+   * - pro-multi 维度持久化（刷新不丢）
+   * - 不与 pro-variable / image-* 共享
+   */
+  temporaryVariables: Record<string, string>
+
   messageChainMap: Record<string, string>
   testResults: TestResults | null
   layout: ProMultiLayoutConfig
@@ -93,6 +102,7 @@ const createDefaultState = (): ProMultiMessageSessionState => ({
   reasoning: '',
   chainId: '',
   versionId: '',
+  temporaryVariables: {},
   messageChainMap: {},
   testResults: null,
   // v2: 多列测试（最多 4 列）
@@ -145,6 +155,9 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
 
   // 消息-历史链映射（Codex 要求：Map 改 Record）
   const messageChainMap = ref<Record<string, string>>({})
+
+  // 临时变量（子模式隔离 + 持久化）
+  const temporaryVariables = ref<Record<string, string>>({})
 
   // 测试结果
   const testResults = ref<TestResults | null>(null)
@@ -252,6 +265,33 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
    */
   const removeMessageChainMapping = (messageId: string) => {
     delete messageChainMap.value[messageId]
+    lastActiveAt.value = Date.now()
+  }
+
+  // 临时变量（持久化到 session）
+  const setTemporaryVariable = (name: string, value: string) => {
+    if (!isValidVariableName(name)) {
+      console.warn('[ProMultiMessageSession] Ignoring invalid temporary variable name:', name)
+      return
+    }
+    temporaryVariables.value[name] = value
+    lastActiveAt.value = Date.now()
+  }
+
+  const getTemporaryVariable = (name: string): string | undefined => {
+    return Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)
+      ? temporaryVariables.value[name]
+      : undefined
+  }
+
+  const deleteTemporaryVariable = (name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)) return
+    delete temporaryVariables.value[name]
+    lastActiveAt.value = Date.now()
+  }
+
+  const clearTemporaryVariables = () => {
+    temporaryVariables.value = {}
     lastActiveAt.value = Date.now()
   }
 
@@ -368,6 +408,7 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
     reasoning.value = defaultState.reasoning
     chainId.value = defaultState.chainId
     versionId.value = defaultState.versionId
+    temporaryVariables.value = defaultState.temporaryVariables
     messageChainMap.value = defaultState.messageChainMap
     testResults.value = defaultState.testResults
     layout.value = defaultState.layout
@@ -402,6 +443,7 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
         reasoning: reasoning.value,
         chainId: chainId.value,
         versionId: versionId.value,
+        temporaryVariables: sanitizeVariableRecord(temporaryVariables.value),
         messageChainMap: messageChainMap.value,
         testResults: testResults.value,
         layout: layout.value,
@@ -454,6 +496,8 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
         reasoning.value = typeof parsed.reasoning === 'string' ? parsed.reasoning : ''
         chainId.value = typeof parsed.chainId === 'string' ? parsed.chainId : ''
         versionId.value = typeof parsed.versionId === 'string' ? parsed.versionId : ''
+
+        temporaryVariables.value = sanitizeVariableRecord(parsed.temporaryVariables)
         messageChainMap.value = (parsed.messageChainMap && typeof parsed.messageChainMap === 'object')
           ? (parsed.messageChainMap as Record<string, string>)
           : {}
@@ -626,6 +670,7 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
     reasoning,
     chainId,
     versionId,
+    temporaryVariables,
     messageChainMap,
     testResults,
     layout,
@@ -647,6 +692,11 @@ export const useProMultiMessageSession = defineStore('proMultiMessageSession', (
     updateMessageChainMap,
     setMessageChainMap,
     removeMessageChainMapping,
+
+    setTemporaryVariable,
+    getTemporaryVariable,
+    deleteTemporaryVariable,
+    clearTemporaryVariables,
     updateTestResults,
     updateOptimizeModel,
     updateTestModel,

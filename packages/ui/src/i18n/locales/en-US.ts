@@ -1080,6 +1080,8 @@ export default {
       noTestContent: "Please enter test content",
       noOriginalPrompt: "Please enter the original prompt first",
       noOptimizedPrompt: "Please generate the optimized prompt first",
+      missingVariables: "Missing or empty variables: {vars}",
+      forbiddenTemplateSyntax: "Unescaped Mustache syntax (e.g. triple braces or ampersand tags) is not supported. Please use normal variable placeholders.",
       originalTestFailed: "Original prompt test failed",
       optimizedTestFailed: "Optimized prompt test failed",
       saveToGlobalFailed: "Failed to save variable {name} to global",
@@ -1091,6 +1093,7 @@ export default {
       detected: "Variables Detected",
       manageVariables: "Manage Variables",
       viewPreview: "View Preview",
+      title: "Variables",
       formTitle: "Temporary Variables",
       variablesCount: "variables",
       clearAll: "Clear All",
@@ -1911,6 +1914,8 @@ export default {
       validationFailed: "The selected config/model does not support this operation",
       generateFailed: "Image generation failed",
       missingRequiredFields: "Please select an image model and enter a valid prompt",
+      missingVariables: "Missing or empty variables: {vars}",
+      forbiddenTemplateSyntax: "Unescaped Mustache syntax (e.g. triple braces or ampersand tags) is not supported. Please use normal variable placeholders.",
       inputImageRequired: "Please upload an input image (required for image-to-image)",
       generationCompleted: "Image generation completed",
     },
@@ -2101,7 +2106,7 @@ export default {
     dialogTitle: "Extract as Variable",
     variableName: "Variable Name",
     variableNamePlaceholder:
-      "Enter variable name (letters, numbers, underscore)",
+      "Enter variable name (no spaces/braces; cannot start with number)",
     variableValue: "Variable Value",
     variableValuePlaceholder: "Selected text content",
     variableType: "Variable Type",
@@ -2123,9 +2128,12 @@ export default {
     readonlyWarning: "Cannot extract variables in readonly mode",
     validation: {
       required: "Variable name cannot be empty",
+      tooLong: "Variable name is too long (max {max} characters)",
+      forbiddenPrefix: "Variable name cannot start with # / ^ ! > &",
       noNumberStart: "Variable name cannot start with a number",
       invalidCharacters:
-        "Variable name can only contain letters, numbers, underscore",
+        "Variable name cannot contain whitespace or braces ({})",
+      reservedName: "Variable name is reserved and cannot be used",
       predefinedVariable: "Cannot use predefined variable name",
       duplicateVariable:
         "Variable name already exists, will reference existing variable",
@@ -2206,7 +2214,8 @@ export default {
       noPromptContent: "Please enter prompt content first",
       noEvaluationModel: "Please select an evaluation model first",
       serviceNotReady: "Variable extraction service not ready",
-      invalidVariableNames: "The following variable names are invalid (only letters, numbers, underscores, and Chinese characters allowed): {names}",
+      invalidVariableNames:
+        "Invalid variable names (cannot start with number or # / ^ ! > &; no whitespace/braces; max {max} chars): {names}",
     },
 
     // Diagnosis related translations

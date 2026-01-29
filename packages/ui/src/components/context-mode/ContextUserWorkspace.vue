@@ -87,12 +87,7 @@
                     :enable-variable-extraction="true"
                     :show-extract-button="true"
                     :extracting="props.isExtracting"
-                    :existing-global-variables="existingGlobalVariableNames"
-                    :existing-temporary-variables="existingTemporaryVariableNames"
-                    :predefined-variables="predefinedVariableNames"
-                    :global-variable-values="globalVariableValues"
-                    :temporary-variable-values="temporaryVariableValues"
-                    :predefined-variable-values="predefinedVariableValues"
+                    v-bind="inputPanelVariableData || {}"
                     @extract-variables="handleExtractVariables"
                     @variable-extracted="handleVariableExtracted"
                     @add-missing-variable="handleAddMissingVariable"
@@ -211,12 +206,11 @@
                         mode="variables-only"
                         :prompt="contextUserOptimization.prompt"
                         :optimized-prompt="contextUserOptimization.optimizedPrompt"
-                        :evaluation-model-key="props.evaluationModelKey"
+                        :evaluation-model-key="effectiveEvaluationModelKey"
                         :services="servicesRef"
                         :global-variables="globalVariables"
                         :predefined-variables="predefinedVariables"
                         :temporary-variables="temporaryVariables"
-                        @open-global-variables="emit('open-global-variables')"
                         @variable-change="handleTestVariableChange"
                         @save-to-global="(name: string, value: string) => emit('save-to-global', name, value)"
                         @temporary-variable-remove="handleTestVariableRemove"
@@ -499,6 +493,7 @@ import type { IteratePayload, SaveFavoritePayload } from "../../types/workspace"
 import type { AppServices } from '../../types/services';
 import type { VariableManagerHooks } from '../../composables/prompt/useVariableManager';
 import { useTemporaryVariables } from "../../composables/variable/useTemporaryVariables";
+import { useVariableAwareInputBridge } from '../../composables/variable/useVariableAwareInputBridge'
 import { useContextUserOptimization } from '../../composables/prompt/useContextUserOptimization';
 import type { ConversationMessage } from '../../types/variable'
 import { useEvaluationHandler, provideEvaluation, provideProContext } from '../../composables/prompt';
@@ -513,6 +508,7 @@ import { useWorkspaceModelSelection } from '../../composables/workspaces/useWork
 import { useWorkspaceTemplateSelection } from '../../composables/workspaces/useWorkspaceTemplateSelection';
 import { OptionAccessors } from '../../utils/data-transformer';
 import { useElementSize } from '@vueuse/core'
+import { buildPromptExecutionContext, hashString, hashVariables } from '../../utils/prompt-variables'
 
 // ========================
 // Props 定义
@@ -582,8 +578,6 @@ const emit = defineEmits<{
     "save-favorite": [data: SaveFavoritePayload];
 
     // --- 打开面板/管理器 ---
-    /** 打开全局变量管理器 */
-    "open-global-variables": [];
     /** 打开变量管理器 */
     "open-variable-manager": [];
     /** 打开模板管理器 */
@@ -736,6 +730,12 @@ const templateSelection = useWorkspaceTemplateSelection(
     'contextUserOptimize',
     'contextIterate'
 )
+
+// Variable value generation uses ContextUserTestPanel and requires a model key.
+// If the app-level evaluation model key isn't configured, fall back to the selected optimize model.
+const effectiveEvaluationModelKey = computed(() => {
+    return props.evaluationModelKey || modelSelection.selectedOptimizeModelKey.value || ''
+})
 
 const patchSessionOptimizedResult = (
     partial: Partial<{
@@ -1032,31 +1032,20 @@ const getVariantOutputTestId = (id: TestVariantId) => {
 const getVariantResult = (id: TestVariantId) => variantResults[id]
 const hasVariantResult = (id: TestVariantId) => !!(variantResults[id]?.result || '').trim()
 
-const hashString = (input: string): string => {
-    let hash = 5381
-    for (let i = 0; i < input.length; i++) {
-        hash = ((hash << 5) + hash) ^ input.charCodeAt(i)
-    }
-    return (hash >>> 0).toString(36)
-}
-
-const stableStringifyVars = (vars: Record<string, string>): string => {
-    const keys = Object.keys(vars).sort()
-    let out = ''
-    for (const k of keys) {
-        out += `${k}=${vars[k] ?? ''}\n`
-    }
-    return out
-}
-
-const variablesHash = computed(() => hashString(stableStringifyVars(mergedTestVariables.value)))
-
 const getVariantFingerprint = (id: TestVariantId) => {
     const selection = variantVersionModels[id].value
     const resolved = resolveTestPrompt(selection)
     const modelKey = variantModelKeyModels[id].value || ''
     const promptHash = hashString((resolved.text || '').trim())
-    return `${String(selection)}:${resolved.resolvedVersion}:${modelKey}:${promptHash}:${variablesHash.value}`
+    const baseVars = variableManager?.allVariables.value || {}
+    const varsForFingerprint = {
+        ...baseVars,
+        ...mergedTestVariables.value,
+        currentPrompt: (resolved.text || '').trim(),
+        userQuestion: (resolved.text || '').trim(),
+    }
+    const varsHash = hashVariables(varsForFingerprint)
+    return `${String(selection)}:${resolved.resolvedVersion}:${modelKey}:${promptHash}:${varsHash}`
 }
 
 const isVariantStale = (id: TestVariantId) => {
@@ -1112,6 +1101,26 @@ const runVariant = async (
     const input = getVariantTestInput(id)
     if (!input) return false
 
+    const userPrompt = input.userPrompt
+
+    const baseVars = variableManager?.allVariables.value || {}
+    const variables = {
+        ...baseVars,
+        ...mergedTestVariables.value,
+        currentPrompt: userPrompt,
+        userQuestion: userPrompt,
+    }
+
+    const ctx = buildPromptExecutionContext(userPrompt, variables)
+    if (ctx.forbiddenTemplateSyntax.length > 0) {
+        toast.error(t('test.error.forbiddenTemplateSyntax'))
+        return false
+    }
+    if (ctx.missingVariables.length > 0) {
+        toast.error(t('test.error.missingVariables', { vars: ctx.missingVariables.join(', ') }))
+        return false
+    }
+
     if (!opts?.skipClearEvaluation) {
         evaluationHandler.clearBeforeTest()
     }
@@ -1120,18 +1129,8 @@ const runVariant = async (
     variantRunning[id] = true
 
     try {
-        const userPrompt = input.userPrompt
-
-        const baseVars = variableManager?.variableManager.value?.resolveAllVariables() || {}
-        const variables = {
-            ...baseVars,
-            ...mergedTestVariables.value,
-            currentPrompt: userPrompt,
-            userQuestion: userPrompt,
-        }
-
         const messages: ConversationMessage[] = [
-            { role: 'user' as const, content: userPrompt },
+            { role: 'user' as const, content: ctx.renderedContent },
         ]
 
         await promptService.testCustomConversationStream(
@@ -1239,21 +1238,21 @@ const proContext = computed<ProUserEvaluationContext | undefined>(() => {
         }
     } else {
         // 回退方案：使用正则表达式扫描 {{varName}} 格式的变量
-        // 使用 [^{}]+ 替代 \w+ 以支持中文等 Unicode 变量名
-        const varPattern = /\{\{([^{}]+)\}\}/g;
+        // 允许两侧空格，但变量名内部不允许空白（支持中文等 Unicode 变量名）
+        const varPattern = /\{\{\s*([^{}\s]+)\s*\}\}/gu;
         let match;
         if (rawPrompt) {
-            while ((match = varPattern.exec(rawPrompt)) !== null) {
-                const name = match[1]?.trim();
-                if (name) usedVarNames.add(name);
-            }
+          while ((match = varPattern.exec(rawPrompt)) !== null) {
+            const name = match[1]?.trim();
+            if (name) usedVarNames.add(name);
+          }
         }
         if (resolvedPrompt) {
-            varPattern.lastIndex = 0; // 重置正则表达式
-            while ((match = varPattern.exec(resolvedPrompt)) !== null) {
-                const name = match[1]?.trim();
-                if (name) usedVarNames.add(name);
-            }
+          varPattern.lastIndex = 0; // 重置正则表达式
+          while ((match = varPattern.exec(resolvedPrompt)) !== null) {
+            const name = match[1]?.trim();
+            if (name) usedVarNames.add(name);
+          }
         }
     }
 
@@ -1312,11 +1311,7 @@ const evaluationHandler = useEvaluationHandler({
     optimizedPrompt: computed(() => resolvedOptimizedTestPrompt.value.text),
     testContent: computed(() => ''), // 变量模式不需要单独的测试内容，通过变量系统管理
     testResults: testResultsData,
-    evaluationModelKey: computed(() => {
-        const key =
-            props.evaluationModelKey || modelSelection.selectedOptimizeModelKey.value;
-        return key || "";
-    }),
+    evaluationModelKey: effectiveEvaluationModelKey,
     functionMode: computed(() => 'pro'),
     subMode: computed(() => 'variable'),
     proContext,
@@ -1377,25 +1372,22 @@ const handleClearEvaluation = () => {
 }
 
 // ========================
-// 计算属性
+// 变量感知输入（InputPanel 变量提取/缺失变量）
 // ========================
-/** 全局变量名列表 (用于变量名重复检测) */
-const existingGlobalVariableNames = computed(() => Object.keys(props.globalVariables));
-
-/** 临时变量名列表 (用于变量名重复检测) */
-const existingTemporaryVariableNames = computed(() => Object.keys(temporaryVariables.value));
-
-/** 预定义变量名列表 (用于变量名重复检测) */
-const predefinedVariableNames = computed(() => Object.keys(props.predefinedVariables));
-
-/** 全局变量名到值的映射 (用于补全展示) */
-const globalVariableValues = computed(() => ({ ...props.globalVariables }));
-
-/** 临时变量名到值的映射 (用于补全展示) */
-const temporaryVariableValues = computed(() => ({ ...temporaryVariables.value }));
-
-/** 预定义变量名到值的映射 (用于补全展示) */
-const predefinedVariableValues = computed(() => ({ ...props.predefinedVariables }));
+const {
+    variableInputData: inputPanelVariableData,
+    handleVariableExtracted,
+    handleAddMissingVariable,
+} = useVariableAwareInputBridge({
+    enabled: computed(() => true),
+    globalVariables: computed(() => ({ ...props.globalVariables })),
+    temporaryVariables: computed(() => ({ ...temporaryVariables.value })),
+    predefinedVariables: computed(() => ({ ...props.predefinedVariables })),
+    saveGlobalVariable: (name, value) => emit('save-to-global', name, value),
+    saveTemporaryVariable: (name, value) => tempVarsManager.setVariable(name, value),
+    afterVariableExtracted: (data) => emit('variable-extracted', data),
+    logPrefix: 'ContextUserWorkspace',
+})
 
 /** 变量提示文本，包含双花括号示例，避免模板解析误判 */
 const doubleBraceToken = "{{}}";
@@ -1415,65 +1407,7 @@ const promptPanelRef = ref<InstanceType<typeof PromptPanelUI> | null>(null);
 // ========================
 // 事件处理
 // ========================
-/**
- * 🆕 处理变量提取事件
- *
- * 工作流程:
- * 1. 接收从 InputPanel 提取的变量数据
- * 2. 根据变量类型进行不同处理:
- *    - 全局变量: 直接触发 save-to-global 事件,由父组件保存到持久化存储
- *    - 临时变量: 保存到当前组件的 temporaryVariables 状态中
- * 3. 显示成功提示
- *
- * @param data 变量提取数据
- */
-const handleVariableExtracted = (data: {
-    variableName: string;
-    variableValue: string;
-    variableType: "global" | "temporary";
-}) => {
-    if (data.variableType === "global") {
-        // 全局变量: 触发事件,由父组件保存
-        emit("save-to-global", data.variableName, data.variableValue);
-        toast.success(
-            t("variableExtraction.savedToGlobal", {
-                name: data.variableName,
-            }),
-        );
-    } else {
-        // 🆕 临时变量: 使用 composable 方法保存
-        tempVarsManager.setVariable(data.variableName, data.variableValue);
-        toast.success(
-            t("variableExtraction.savedToTemporary", {
-                name: data.variableName,
-            }),
-        );
-    }
-
-    // 同时触发变量提取事件,通知父组件
-    emit("variable-extracted", data);
-};
-
-/**
- * 🆕 处理添加缺失变量事件
- *
- * 当用户在输入框中悬停在缺失变量上并点击"添加到临时变量"时触发
- *
- * 工作流程:
- * 1. 将变量添加到临时变量列表,初始值为空字符串
- * 2. 显示成功提示
- *
- * @param varName 变量名
- */
-const handleAddMissingVariable = (varName: string) => {
-    // 🆕 使用 composable 方法添加到临时变量,值为空
-    tempVarsManager.setVariable(varName, "");
-
-    // 显示成功提示 (在 VariableAwareInput 中已经显示过了,这里不重复)
-    // window.$message?.success(
-    //     t("variableDetection.addSuccess", { name: varName })
-    // );
-};
+// handleVariableExtracted / handleAddMissingVariable are provided by useVariableAwareInputBridge
 
 /**
  * 🆕 处理AI变量提取事件

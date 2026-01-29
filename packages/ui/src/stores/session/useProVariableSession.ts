@@ -4,13 +4,14 @@
  * 管理 Pro 模式下 User 子模式的会话状态
  * 结构与 BasicSystemSession 类似，但专注于变量优化场景
  *
- * 注意：临时变量由独立的 temporaryVariables store 管理
+ * 注意：临时变量在 Pro/Image 子模式内会持久化到各自 session store（Basic 仍为全局内存态）
  */
 
 import { defineStore } from 'pinia'
 import { ref, type Ref } from 'vue'
 import { getPiniaServices } from '../../plugins/pinia'
 import { TEMPLATE_SELECTION_KEYS } from '@prompt-optimizer/core'
+import { isValidVariableName, sanitizeVariableRecord } from '../../types/variable'
 import {
   createDefaultEvaluationResults,
   type PersistedEvaluationResults,
@@ -67,6 +68,13 @@ export interface ProVariableSessionState {
   // 变量模式无需单独 testContent；保留字段用于兼容与最小侵入
   testContent: string
 
+  /**
+   * 临时变量（子模式隔离 + 持久化）
+   * - pro-variable 维度持久化（刷新不丢）
+   * - 不与 pro-multi / image-* 共享
+   */
+  temporaryVariables: Record<string, string>
+
   // legacy: 旧版对比测试结果（仅 A/B）
   testResults: TestResults | null
 
@@ -95,6 +103,7 @@ const createDefaultState = (): ProVariableSessionState => ({
   chainId: '',
   versionId: '',
   testContent: '',
+  temporaryVariables: {},
   testResults: null,
   layout: { mainSplitLeftPct: 50, testColumnCount: 2 },
   testVariants: [
@@ -133,6 +142,7 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
   const chainId = ref('')
   const versionId = ref('')
   const testContent = ref('')
+  const temporaryVariables = ref<Record<string, string>>({})
   const testResults = ref<TestResults | null>(null)
   const layout = ref<ProVariableLayoutConfig>({ mainSplitLeftPct: 50, testColumnCount: 2 })
   const testVariants = ref<TestVariantConfig[]>([
@@ -219,6 +229,33 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
     lastActiveAt.value = Date.now()
   }
 
+  // 临时变量（持久化到 session）
+  const setTemporaryVariable = (name: string, value: string) => {
+    if (!isValidVariableName(name)) {
+      console.warn('[ProVariableSession] Ignoring invalid temporary variable name:', name)
+      return
+    }
+    temporaryVariables.value[name] = value
+    lastActiveAt.value = Date.now()
+  }
+
+  const getTemporaryVariable = (name: string): string | undefined => {
+    return Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)
+      ? temporaryVariables.value[name]
+      : undefined
+  }
+
+  const deleteTemporaryVariable = (name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(temporaryVariables.value, name)) return
+    delete temporaryVariables.value[name]
+    lastActiveAt.value = Date.now()
+  }
+
+  const clearTemporaryVariables = () => {
+    temporaryVariables.value = {}
+    lastActiveAt.value = Date.now()
+  }
+
   const updateOptimizeModel = (modelKey: string) => {
     if (selectedOptimizeModelKey.value === modelKey) return
     selectedOptimizeModelKey.value = modelKey
@@ -292,6 +329,7 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
     chainId.value = defaultState.chainId
     versionId.value = defaultState.versionId
     testContent.value = defaultState.testContent
+    temporaryVariables.value = defaultState.temporaryVariables
     testResults.value = defaultState.testResults
     layout.value = defaultState.layout
     testVariants.value = defaultState.testVariants
@@ -322,6 +360,7 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
         chainId: chainId.value,
         versionId: versionId.value,
         testContent: testContent.value,
+        temporaryVariables: sanitizeVariableRecord(temporaryVariables.value),
         testResults: testResults.value,
         layout: layout.value,
         testVariants: testVariants.value,
@@ -369,6 +408,10 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
         chainId.value = typeof parsed.chainId === 'string' ? parsed.chainId : ''
         versionId.value = typeof parsed.versionId === 'string' ? parsed.versionId : ''
         testContent.value = typeof parsed.testContent === 'string' ? parsed.testContent : ''
+
+        temporaryVariables.value = sanitizeVariableRecord(
+          (parsed as Partial<ProVariableSessionState>).temporaryVariables,
+        )
         testResults.value = (parsed.testResults && typeof parsed.testResults === 'object')
           ? (parsed.testResults as TestResults)
           : null
@@ -500,6 +543,7 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
     chainId,
     versionId,
     testContent,
+    temporaryVariables,
     testResults,
     layout,
     testVariants,
@@ -518,6 +562,11 @@ export const useProVariableSession = defineStore('proVariableSession', () => {
     updateOptimizedResult,
     updateTestContent,
     updateTestResults,
+
+    setTemporaryVariable,
+    getTemporaryVariable,
+    deleteTemporaryVariable,
+    clearTemporaryVariables,
     updateOptimizeModel,
     updateTestModel,
     updateTemplate,
