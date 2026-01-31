@@ -229,6 +229,7 @@ import {
 } from "vue";
 import { RouterView } from "vue-router";
 import { router as routerInstance } from '../../router';
+import { registerOptionalIntegrations } from '../../integrations/registerOptionalIntegrations';
 import { useI18n } from "vue-i18n";
 import {
     NConfigProvider,
@@ -1548,6 +1549,20 @@ const {
     isLoadingExternalData,
 });
 
+// Optional integrations (feature-flagged + lazy-loaded).
+void registerOptionalIntegrations({
+    router: routerInstance,
+    hasRestoredInitialState,
+    isLoadingExternalData,
+    optimizationContext,
+    basicSystemSession,
+    basicUserSession,
+    proMultiMessageSession,
+    proVariableSession,
+    imageText2ImageSession,
+    imageImage2ImageSession,
+    optimizerCurrentVersions,
+});
 provide("handleSaveFavorite", handleSaveFavorite);
 
 // 模板管理器
@@ -1850,6 +1865,16 @@ const openModelManager = (tab: "text" | "image" | "function" = "text") => {
     }, 0);
 };
 provide("openModelManager", openModelManager);
+
+// 提供 openContextEditor 接口（供 Pro Multi 等工作区直接调用）
+type ContextEditorOpenArg = ConversationMessage[] | "messages" | "variables" | "tools";
+const openContextEditor = (
+    messagesOrTab?: ContextEditorOpenArg,
+    variables?: Record<string, string>,
+) => {
+    void contextManagement.handleOpenContextEditor(messagesOrTab, variables);
+};
+provide("openContextEditor", openContextEditor);
 
 // 模型管理器关闭回调
 const handleModelManagerClosed = async () => {
