@@ -27,7 +27,7 @@ jobs:
           const upstream_repo = "linshenkx/prompt-optimizer";
           
           // 👇 2. 设置分支
-          const branch = "main"; 
+          const branch = "develop"; 
 
           try {
             // 修正：删除了报错的 require 语句
