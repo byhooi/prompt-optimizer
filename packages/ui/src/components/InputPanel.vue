@@ -138,6 +138,8 @@
             @update:model-value="$emit('update:modelValue', $event)"
             :placeholder="placeholder"
             :autosize="{ minRows: 4, maxRows: 12 }"
+            clearable
+            show-count
             :data-testid="`${testIdPrefix}-input`"
             :existing-global-variables="existingGlobalVariables"
             :existing-temporary-variables="existingTemporaryVariables"
@@ -237,7 +239,8 @@
             v-model:value="fullscreenValue"
             type="textarea"
             :placeholder="placeholder"
-            :autosize="{ minRows: 20 }"
+            :autosize="false"
+            style="height: 100%; min-height: 0;"
             clearable
             show-count
         />

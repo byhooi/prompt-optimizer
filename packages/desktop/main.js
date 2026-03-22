@@ -537,9 +537,13 @@ async function initializeServices() {
     const staticEnvVars = [
       'VITE_OPENAI_API_KEY',
       'VITE_GEMINI_API_KEY',
+      'VITE_ANTHROPIC_API_KEY',
       'VITE_DEEPSEEK_API_KEY',
       'VITE_SILICONFLOW_API_KEY',
       'VITE_ZHIPU_API_KEY',
+      'VITE_DASHSCOPE_API_KEY',
+      'VITE_OPENROUTER_API_KEY',
+      'VITE_MODELSCOPE_API_KEY',
       'VITE_CUSTOM_API_KEY',
       'VITE_CUSTOM_API_BASE_URL',
       'VITE_CUSTOM_API_MODEL'
@@ -905,9 +909,18 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle('prompt-iteratePrompt', async (event, originalPrompt, lastOptimizedPrompt, iterateInput, modelKey, templateId) => {
+  ipcMain.handle('prompt-optimizeMessage', async (event, request) => {
     try {
-      const result = await promptService.iteratePrompt(originalPrompt, lastOptimizedPrompt, iterateInput, modelKey, templateId);
+      const result = await promptService.optimizeMessage(request);
+      return createSuccessResponse(result);
+    } catch (error) {
+      return createErrorResponse(error);
+    }
+  });
+
+  ipcMain.handle('prompt-iteratePrompt', async (event, originalPrompt, lastOptimizedPrompt, iterateInput, modelKey, templateId, contextData) => {
+    try {
+      const result = await promptService.iteratePrompt(originalPrompt, lastOptimizedPrompt, iterateInput, modelKey, templateId, contextData);
       return createSuccessResponse(result);
     } catch (error) {
       return createErrorResponse(error);
@@ -975,6 +988,17 @@ function setupIPC() {
     const streamHandlers = createIpcStreamHandlers(mainWindow, streamId);
     try {
       await promptService.optimizePromptStream(request, streamHandlers);
+      return createSuccessResponse(null);
+    } catch (error) {
+      streamHandlers.onError(error);
+      return createErrorResponse(error);
+    }
+  });
+
+  ipcMain.handle('prompt-optimizeMessageStream', async (event, request, streamId) => {
+    const streamHandlers = createIpcStreamHandlers(mainWindow, streamId);
+    try {
+      await promptService.optimizeMessageStream(request, streamHandlers);
       return createSuccessResponse(null);
     } catch (error) {
       streamHandlers.onError(error);

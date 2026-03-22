@@ -118,6 +118,8 @@
                         :placeholder="t('imageWorkspace.input.originalPromptPlaceholder')"
                         :autosize="true"
                         v-bind="variableInputData"
+                        clearable
+                        show-count
                         @variable-extracted="handleVariableExtracted"
                         @add-missing-variable="handleAddMissingVariable"
                     />
@@ -132,6 +134,7 @@
                         :rows="4"
                         :autosize="{ minRows: 4, maxRows: 12 }"
                         clearable
+                        show-count
                         :disabled="isOptimizing"
                     />
 
@@ -498,6 +501,8 @@
                                                     </NCard>
                                                 </template>
 
+                                                <ImageTokenUsage :metadata="getVariantResult(id)?.metadata" :image="getVariantResult(id)?.images?.[0]" />
+
                                                 <NSpace justify="center" :size="8">
                                                     <NButton
                                                         size="small"
@@ -568,7 +573,8 @@
                 v-model:value="fullscreenValue"
                 type="textarea"
                 :placeholder="t('imageWorkspace.input.originalPromptPlaceholder')"
-                :autosize="{ minRows: 20 }"
+                :autosize="false"
+                style="height: 100%; min-height: 0;"
                 clearable
                 show-count
                 :disabled="isOptimizing"
@@ -590,6 +596,7 @@
             :current-type="panelProps.currentType"
             :score-level="panelProps.scoreLevel"
             @re-evaluate="evaluationHandler.handleReEvaluate"
+            @evaluate-with-feedback="handleEvaluateActiveWithFeedback"
             @apply-local-patch="handleApplyPatch"
             @apply-improvement="handleApplyImprovement"
             @clear="handleClearEvaluation"
@@ -667,7 +674,8 @@ import {
     type TestVariantId,
 } from '../../stores/session/useImageText2ImageSession'
 import { useImageGeneration } from '../../composables/image/useImageGeneration'
-import { useEvaluationHandler, type TestResultsData } from '../../composables/prompt/useEvaluationHandler'
+import ImageTokenUsage from './ImageTokenUsage.vue'
+import { useEvaluationHandler } from '../../composables/prompt/useEvaluationHandler'
 import { useWorkspaceTemplateSelection } from '../../composables/workspaces/useWorkspaceTemplateSelection'
 import { useWorkspaceTextModelSelection } from '../../composables/workspaces/useWorkspaceTextModelSelection'
 import { useElementSize } from '@vueuse/core'
@@ -962,17 +970,17 @@ const variantAVersionModel = computed<TestPanelVersionValue>({
 })
 
 const variantBVersionModel = computed<TestPanelVersionValue>({
-    get: () => getVariant('b')?.version ?? 'latest',
+    get: () => getVariant('b')?.version ?? 'workspace',
     set: (value) => session.updateTestVariant('b', { version: value }),
 })
 
 const variantCVersionModel = computed<TestPanelVersionValue>({
-    get: () => getVariant('c')?.version ?? 'latest',
+    get: () => getVariant('c')?.version ?? 'workspace',
     set: (value) => session.updateTestVariant('c', { version: value }),
 })
 
 const variantDVersionModel = computed<TestPanelVersionValue>({
-    get: () => getVariant('d')?.version ?? 'latest',
+    get: () => getVariant('d')?.version ?? 'workspace',
     set: (value) => session.updateTestVariant('d', { version: value }),
 })
 
@@ -1032,7 +1040,7 @@ const testGridTemplateColumns = computed(
     () => `repeat(${testColumnCountModel.value}, minmax(0, 1fr))`,
 )
 
-// 版本选项：原始(v0) + 中间版本(v1..v(n-1)) + 最新(latest)
+// 版本选项：默认显示“工作区”与“原始(v0)”；若存在历史版本，则额外显示 v1..vn。
 const versionOptions = computed(() => {
     const versions = currentVersions.value || []
 
@@ -1042,13 +1050,10 @@ const versionOptions = computed(() => {
         .slice()
         .sort((a, b) => a - b)
 
-    const latest = sortedVersions.length ? sortedVersions[sortedVersions.length - 1] : null
-    const middle = latest ? sortedVersions.filter((v) => v < latest) : []
-
     return [
+        { label: t('test.layout.workspace'), value: 'workspace' },
         { label: t('test.layout.original'), value: 0 },
-        ...middle.map((v) => ({ label: `v${v}`, value: v })),
-        { label: t('test.layout.latest'), value: 'latest' },
+        ...sortedVersions.map((v) => ({ label: `v${v}`, value: v })),
     ]
 })
 
@@ -1077,22 +1082,15 @@ type ResolvedPrompt = { text: string; resolvedVersion: number }
 
 const resolvePromptForSelection = (selection: TestPanelVersionValue): ResolvedPrompt => {
     const v0 = originalPrompt.value || ''
+    const workspace = optimizedPrompt.value || ''
     const versions = currentVersions.value || []
 
-    const latest = versions.reduce<{ version: number; optimizedPrompt: string } | null>((acc, v) => {
-        if (typeof v.version !== 'number' || v.version < 1) return acc
-        const next = { version: v.version, optimizedPrompt: v.optimizedPrompt || '' }
-        if (!acc || next.version > acc.version) return next
-        return acc
-    }, null)
+    if (selection === 'workspace') {
+        return { text: workspace, resolvedVersion: -1 }
+    }
 
     if (selection === 0) {
         return { text: v0, resolvedVersion: 0 }
-    }
-
-    if (selection === 'latest') {
-        if (!latest) return { text: optimizedPrompt.value || v0, resolvedVersion: 0 }
-        return { text: latest.optimizedPrompt || '', resolvedVersion: latest.version }
     }
 
     const target = versions.find((v) => v.version === selection)
@@ -1100,8 +1098,7 @@ const resolvePromptForSelection = (selection: TestPanelVersionValue): ResolvedPr
         return { text: target.optimizedPrompt || '', resolvedVersion: target.version }
     }
 
-    if (latest) return { text: latest.optimizedPrompt || '', resolvedVersion: latest.version }
-    return { text: optimizedPrompt.value || v0, resolvedVersion: 0 }
+    return { text: '', resolvedVersion: -1 }
 }
 
 // 注意：Pinia setup store 会把 ref 自动解包；直接赋值会丢失响应性。
@@ -1345,10 +1342,7 @@ const runAllVariants = async () => {
 // 评估处理器（图像模式专用：testResults 不参与）
 const evaluationHandler = useEvaluationHandler({
     services,
-    originalPrompt,
-    optimizedPrompt,
-    testContent: computed(() => ''),
-    testResults: ref<TestResultsData | null>(null),
+    analysisOptimizedPrompt: optimizedPrompt,
     evaluationModelKey: selectedTextModelKey,
     functionMode: computed(() => 'image'),
     subMode: computed(() => 'text2image'),
@@ -1360,6 +1354,10 @@ provideEvaluation(evaluationHandler.evaluation)
 
 const { evaluation } = evaluationHandler
 const panelProps = evaluationHandler.panelProps
+
+const handleEvaluateActiveWithFeedback = async (payload: { feedback: string }) => {
+    await evaluationHandler.handleEvaluateActiveWithFeedback(payload.feedback)
+}
 
 const handleApplyImprovement = (payload: { improvement: string }) => {
     evaluation.closePanel()
@@ -1940,6 +1938,9 @@ const getImageSrc = (imageItem: ImageResultItem | null | undefined) => {
 const downloadImageFromResult = async (imageItem: ImageResultItem | null | undefined, prefix: string) => {
     if (!imageItem) return
 
+    const ext = (imageItem.mimeType?.replace('image/', '') || 'png').replace('jpeg', 'jpg')
+    const filename = `${prefix}-image.${ext}`
+
     if (imageItem.url) {
         try {
             const response = await fetch(imageItem.url)
@@ -1947,7 +1948,7 @@ const downloadImageFromResult = async (imageItem: ImageResultItem | null | undef
             const url = window.URL.createObjectURL(blob)
             const a = document.createElement('a')
             a.href = url
-            a.download = `${prefix}-image.png`
+            a.download = filename
             a.click()
             window.URL.revokeObjectURL(url)
         } catch {
@@ -1960,7 +1961,7 @@ const downloadImageFromResult = async (imageItem: ImageResultItem | null | undef
         const a = document.createElement('a')
         const mime = imageItem.mimeType ?? 'image/png'
         a.href = `data:${mime};base64,${imageItem.b64}`
-        a.download = `${prefix}-image.png`
+        a.download = filename
         a.click()
     }
 }

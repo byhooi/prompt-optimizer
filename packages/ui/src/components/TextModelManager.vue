@@ -6,6 +6,7 @@
       :is-default-model="manager.isDefaultModel"
       @test="handleTestConnection"
       @edit="handleEditModel"
+      @clone="handleCloneModel"
       @enable="handleEnableModel"
       @disable="handleDisableModel"
       @delete="handleDeleteModel"
@@ -67,7 +68,10 @@ const handleTestConnection = async (id: string) => {
           content: () => h('div', { style: 'white-space: pre-line;' }, t('modelManager.corsRestrictedConfirm', { provider: providerName })),
           positiveText: t('common.confirm'),
           negativeText: t('common.cancel'),
-          onPositiveClick: runTest
+          // Don't block dialog close while the async test runs.
+          onPositiveClick: () => {
+            void runTest()
+          }
         })
         return
       }
@@ -98,6 +102,16 @@ const updateEditModalVisibility = (value: boolean) => {
   // 当模态框关闭时，重置编辑状态但不重置表单数据
   if (!value) {
     editingModelId.value = null
+  }
+}
+
+const handleCloneModel = async (id: string) => {
+  try {
+    await manager.prepareForClone(id)
+    showEditModal.value = true
+    editingModelId.value = null
+  } catch {
+    // prepareForClone already handles user-facing errors
   }
 }
 
